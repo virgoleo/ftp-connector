@@ -14,6 +14,7 @@ from .exceptions import (
     RemoteTransferError,
 )
 from .models import RemoteEntry
+from .transports.sftp import SFTPClient
 
 __all__ = [
     "AuthenticationError",
@@ -28,6 +29,7 @@ __all__ = [
     "RemoteFileNotFoundError",
     "RemotePermissionError",
     "RemoteTransferError",
+    "SFTPClient",
     "TransferClient",
     "TransferConfig",
 ]

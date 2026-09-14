@@ -15,6 +15,7 @@ def test_public_api_exports_are_declared() -> None:
         "RemoteFileNotFoundError",
         "RemotePermissionError",
         "RemoteTransferError",
+        "SFTPClient",
         "TransferClient",
         "TransferConfig",
     }

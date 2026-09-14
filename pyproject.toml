@@ -11,6 +11,7 @@ requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [{name = "Your Name"}]
 dependencies = [
+  "paramiko>=3.4",
   "typing-extensions>=4.0; python_version < '3.11'",
 ]
 
