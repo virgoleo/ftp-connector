@@ -1,7 +1,7 @@
-"""Production-safe SFTP connectivity entry point.
+"""Production-safe entry point for two SFTP connections.
 
-Supply credentials and connection settings through ``RFT_*`` environment
-variables. This script never reads or writes secrets to disk.
+Supply source settings through ``SOURCE_*`` variables and destination settings
+through ``DEST_*`` variables. This script never reads or writes secrets to disk.
 """
 
 from __future__ import annotations
@@ -20,30 +20,47 @@ from remote_transfer import (
 
 
 def load_config_from_environment(environment: Mapping[str, str] | None = None) -> TransferConfig:
-    """Build a strictly SFTP configuration from runtime environment variables."""
+    """Build one SFTP configuration from the legacy ``RFT_*`` variables."""
 
     values = os.environ if environment is None else environment
+    return _load_sftp_config(values, "RFT_")
+
+
+def load_configs_from_environment(
+    environment: Mapping[str, str] | None = None,
+) -> tuple[TransferConfig, TransferConfig]:
+    """Build source and destination SFTP configurations from environment variables."""
+
+    values = os.environ if environment is None else environment
+    return _load_sftp_config(values, "SOURCE_"), _load_sftp_config(values, "DEST_")
+
+
+def _load_sftp_config(values: Mapping[str, str], prefix: str) -> TransferConfig:
+    """Build one strictly SFTP configuration using the supplied variable prefix."""
+
     try:
-        protocol = Protocol(values.get("RFT_PROTOCOL", "sftp").lower())
-        port = _optional_integer(values.get("RFT_PORT"))
-        connection_timeout = _optional_float(values.get("RFT_CONNECTION_TIMEOUT"), 10.0)
-        authentication_timeout = _optional_float(values.get("RFT_AUTHENTICATION_TIMEOUT"), 10.0)
-        operation_timeout = _optional_float(values.get("RFT_OPERATION_TIMEOUT"), 30.0)
+        protocol = Protocol(values.get(f"{prefix}PROTOCOL", "sftp").lower())
+        port = _optional_integer(values.get(f"{prefix}PORT"))
+        connection_timeout = _optional_float(values.get(f"{prefix}CONNECTION_TIMEOUT"), 10.0)
+        authentication_timeout = _optional_float(
+            values.get(f"{prefix}AUTHENTICATION_TIMEOUT"), 10.0
+        )
+        operation_timeout = _optional_float(values.get(f"{prefix}OPERATION_TIMEOUT"), 30.0)
     except ValueError as exc:
-        raise ConfigurationError("Invalid numeric or protocol environment setting") from exc
+        raise ConfigurationError(f"Invalid numeric or protocol setting for {prefix}") from exc
 
     if protocol is not Protocol.SFTP:
-        raise ConfigurationError("main.py supports only the SFTP protocol")
+        raise ConfigurationError(f"{prefix}PROTOCOL must be sftp")
     return TransferConfig(
         protocol=protocol,
-        host=_required_environment_value(values, "RFT_HOST"),
-        username=_required_environment_value(values, "RFT_USERNAME"),
+        host=_required_environment_value(values, f"{prefix}HOST"),
+        username=_required_environment_value(values, f"{prefix}USERNAME"),
         port=port,
-        password=_optional_text(values.get("RFT_PASSWORD")),
-        private_key_path=_optional_path(values.get("RFT_PRIVATE_KEY_PATH")),
-        private_key_passphrase=_optional_text(values.get("RFT_PRIVATE_KEY_PASSPHRASE")),
-        use_ssh_agent=_boolean_environment_value(values.get("RFT_USE_SSH_AGENT", "false")),
-        known_hosts_path=_optional_path(values.get("RFT_KNOWN_HOSTS_PATH")),
+        password=_optional_text(values.get(f"{prefix}PASSWORD")),
+        private_key_path=_optional_path(values.get(f"{prefix}PRIVATE_KEY_PATH")),
+        private_key_passphrase=_optional_text(values.get(f"{prefix}PRIVATE_KEY_PASSPHRASE")),
+        use_ssh_agent=_boolean_environment_value(values.get(f"{prefix}USE_SSH_AGENT", "false")),
+        known_hosts_path=_optional_path(values.get(f"{prefix}KNOWN_HOSTS_PATH")),
         connection_timeout=connection_timeout,
         authentication_timeout=authentication_timeout,
         operation_timeout=operation_timeout,
@@ -51,13 +68,18 @@ def load_config_from_environment(environment: Mapping[str, str] | None = None) -
 
 
 def main() -> int:
-    """Connect, list ``RFT_REMOTE_PATH`` (or ``.``), and close safely."""
+    """Connect, list each configured remote path, and close safely."""
 
     try:
-        config = load_config_from_environment()
-        remote_path = os.environ.get("RFT_REMOTE_PATH", ".")
-        with SFTPClient(config) as client:
-            for entry in client.list(remote_path):
+        source_config, destination_config = load_configs_from_environment()
+        source_path = os.environ.get("SOURCE_REMOTE_PATH", ".")
+        destination_path = os.environ.get("DEST_REMOTE_PATH", ".")
+        with SFTPClient(source_config) as source, SFTPClient(destination_config) as destination:
+            print("Source entries:")
+            for entry in source.list(source_path):
+                print(entry.path)
+            print("Destination entries:")
+            for entry in destination.list(destination_path):
                 print(entry.path)
     except RemoteTransferError as exc:
         print(f"SFTP connection failed: {exc}")
