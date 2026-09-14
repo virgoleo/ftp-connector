@@ -1,9 +1,16 @@
+import sys
 from pathlib import Path
 
 import pytest
 
 from main import load_config_from_environment, load_configs_from_environment
 from remote_transfer import AuthenticationMode, ConfigurationError
+
+
+def test_main_adds_source_directory_to_module_path() -> None:
+    source_directory = Path(__file__).parents[2] / "src"
+
+    assert str(source_directory) in sys.path
 
 
 def _environment(**overrides: str) -> dict[str, str]:
@@ -44,26 +51,27 @@ def test_main_loads_ssh_agent_configuration_from_environment() -> None:
     assert config.authentication_mode is AuthenticationMode.SSH_AGENT
 
 
-def test_main_loads_source_and_destination_configurations() -> None:
-    source, destination = load_configs_from_environment(
+def test_main_loads_multiple_named_sftp_configurations() -> None:
+    configs = load_configs_from_environment(
         {
-            "SOURCE_HOST": "source.sftp.test",
-            "SOURCE_USERNAME": "source-user",
-            "SOURCE_PRIVATE_KEY_PATH": "source-key",
-            "SOURCE_KNOWN_HOSTS_PATH": "source-known-hosts",
-            "DEST_HOST": "destination.sftp.test",
-            "DEST_USERNAME": "destination-user",
-            "DEST_PASSWORD": "destination-password",
-            "DEST_KNOWN_HOSTS_PATH": "destination-known-hosts",
+            "SFTP_SERVERS": "test, staging",
+            "SFTP_TEST_HOST": "test.sftp.test",
+            "SFTP_TEST_USERNAME": "test-user",
+            "SFTP_TEST_PRIVATE_KEY_PATH": "test-key",
+            "SFTP_TEST_KNOWN_HOSTS_PATH": "test-known-hosts",
+            "SFTP_STAGING_HOST": "staging.sftp.test",
+            "SFTP_STAGING_USERNAME": "staging-user",
+            "SFTP_STAGING_PASSWORD": "staging-password",
+            "SFTP_STAGING_KNOWN_HOSTS_PATH": "staging-known-hosts",
         }
     )
 
-    assert source.host == "source.sftp.test"
-    assert source.private_key_path == Path("source-key")
-    assert source.known_hosts_path == Path("source-known-hosts")
-    assert destination.host == "destination.sftp.test"
-    assert destination.authentication_mode is AuthenticationMode.PASSWORD
-    assert destination.known_hosts_path == Path("destination-known-hosts")
+    assert configs["TEST"].host == "test.sftp.test"
+    assert configs["TEST"].private_key_path == Path("test-key")
+    assert configs["TEST"].known_hosts_path == Path("test-known-hosts")
+    assert configs["STAGING"].host == "staging.sftp.test"
+    assert configs["STAGING"].authentication_mode is AuthenticationMode.PASSWORD
+    assert configs["STAGING"].known_hosts_path == Path("staging-known-hosts")
 
 
 @pytest.mark.parametrize(
@@ -78,8 +86,17 @@ def test_main_loads_source_and_destination_configurations() -> None:
             "RFT_PASSWORD": "test-password",
             "RFT_USE_SSH_AGENT": "maybe",
         },
+        {
+            "SFTP_SERVERS": "test, TEST",
+            "SFTP_TEST_HOST": "test.sftp.test",
+            "SFTP_TEST_USERNAME": "test-user",
+            "SFTP_TEST_PASSWORD": "test-password",
+        },
     ],
 )
 def test_main_rejects_invalid_environment(environment: dict[str, str]) -> None:
     with pytest.raises(ConfigurationError):
-        load_config_from_environment(environment)
+        if "SFTP_SERVERS" in environment:
+            load_configs_from_environment(environment)
+        else:
+            load_config_from_environment(environment)

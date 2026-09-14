@@ -1,14 +1,22 @@
 """Production-safe entry point for two SFTP connections.
 
-Supply source settings through ``SOURCE_*`` variables and destination settings
-through ``DEST_*`` variables. This script never reads or writes secrets to disk.
+Supply settings for any number of servers through ``SFTP_<NAME>_*`` variables.
+This script never reads or writes secrets to disk.
 """
 
 from __future__ import annotations
 
 import os
+import re
+import sys
 from collections.abc import Mapping
 from pathlib import Path
+
+# Allow ``python main.py`` and VS Code's default debugger to use the src-layout
+# package without requiring a manually configured PYTHONPATH.
+_SOURCE_DIRECTORY = Path(__file__).resolve().parent / "src"
+if _SOURCE_DIRECTORY.is_dir():
+    sys.path.insert(0, str(_SOURCE_DIRECTORY))
 
 from remote_transfer import (
     ConfigurationError,
@@ -28,11 +36,15 @@ def load_config_from_environment(environment: Mapping[str, str] | None = None) -
 
 def load_configs_from_environment(
     environment: Mapping[str, str] | None = None,
-) -> tuple[TransferConfig, TransferConfig]:
-    """Build source and destination SFTP configurations from environment variables."""
+) -> dict[str, TransferConfig]:
+    """Build configurations for every server named by ``SFTP_SERVERS``."""
 
     values = os.environ if environment is None else environment
-    return _load_sftp_config(values, "SOURCE_"), _load_sftp_config(values, "DEST_")
+    server_names = _server_names(values)
+    return {
+        server_name: _load_sftp_config(values, f"SFTP_{server_name}_")
+        for server_name in server_names
+    }
 
 
 def _load_sftp_config(values: Mapping[str, str], prefix: str) -> TransferConfig:
@@ -68,18 +80,16 @@ def _load_sftp_config(values: Mapping[str, str], prefix: str) -> TransferConfig:
 
 
 def main() -> int:
-    """Connect, list each configured remote path, and close safely."""
+    """Connect, list each configured server's remote path, and close safely."""
 
     try:
-        source_config, destination_config = load_configs_from_environment()
-        source_path = os.environ.get("SOURCE_REMOTE_PATH", ".")
-        destination_path = os.environ.get("DEST_REMOTE_PATH", ".")
-        with SFTPClient(source_config) as source, SFTPClient(destination_config) as destination:
-            print("Source entries:")
-            for entry in source.list(source_path):
-                print(entry.path)
-            print("Destination entries:")
-            for entry in destination.list(destination_path):
+        configs = load_configs_from_environment()
+        for server_name, config in configs.items():
+            remote_path = os.environ.get(f"SFTP_{server_name}_REMOTE_PATH", ".")
+            with SFTPClient(config) as client:
+                print(f"{server_name} entries:")
+                for entry in client.list(remote_path):
+                    print(entry.path)
                 print(entry.path)
     except RemoteTransferError as exc:
         print(f"SFTP connection failed: {exc}")
@@ -92,6 +102,17 @@ def _required_environment_value(values: Mapping[str, str], name: str) -> str:
     if value is None or not value.strip():
         raise ConfigurationError(f"{name} must be set")
     return value
+
+
+def _server_names(values: Mapping[str, str]) -> list[str]:
+    """Return valid, unique server names from the comma-separated server list."""
+
+    names = [name.strip().upper() for name in _required_environment_value(values, "SFTP_SERVERS").split(",")]
+    if not names or any(not name or re.fullmatch(r"[A-Z][A-Z0-9_]*", name) is None for name in names):
+        raise ConfigurationError("SFTP_SERVERS must contain comma-separated server names")
+    if len(set(names)) != len(names):
+        raise ConfigurationError("SFTP_SERVERS must not contain duplicate server names")
+    return names
 
 
 def _optional_text(value: str | None) -> str | None:
