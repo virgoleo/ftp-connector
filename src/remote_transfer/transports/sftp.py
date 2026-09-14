@@ -25,6 +25,15 @@ from ..exceptions import (
 from ..models import RemoteEntry
 
 
+class _RejectUnknownHostKeyPolicy(paramiko.RejectPolicy):
+    """Reject unknown hosts with the package's stable exception type."""
+
+    def missing_host_key(
+        self, client: paramiko.SSHClient, hostname: str, key: paramiko.PKey
+    ) -> NoReturn:
+        raise HostKeyVerificationError("SSH host key is not trusted")
+
+
 class SFTPClient(TransferClient):
     """SFTP adapter that verifies host keys and translates transport errors."""
 
@@ -46,17 +55,37 @@ class SFTPClient(TransferClient):
             ssh_client.load_system_host_keys()
             if self._config.known_hosts_path is not None:
                 ssh_client.load_host_keys(str(self._config.known_hosts_path))
-            ssh_client.set_missing_host_key_policy(paramiko.RejectPolicy())
+            ssh_client.set_missing_host_key_policy(_RejectUnknownHostKeyPolicy())
             ssh_client.connect(**self._connection_arguments())
             sftp_client = ssh_client.open_sftp()
             self._set_operation_timeout(sftp_client)
         except paramiko.BadHostKeyException:
             ssh_client.close()
             raise HostKeyVerificationError("SSH host key verification failed") from None
+        except paramiko.PasswordRequiredException:
+            ssh_client.close()
+            raise AuthenticationError("SFTP private key passphrase is required or incorrect") from None
         except paramiko.AuthenticationException:
             ssh_client.close()
             raise AuthenticationError("SFTP authentication failed") from None
-        except (paramiko.SSHException, OSError, TimeoutError):
+        except paramiko.SSHException:
+            ssh_client.close()
+            if self._config.authentication_mode is AuthenticationMode.PRIVATE_KEY:
+                raise AuthenticationError(
+                    "Unable to load SFTP private key; verify its path, format, and passphrase"
+                ) from None
+            raise ConnectionError("Unable to connect to SFTP server") from None
+        except FileNotFoundError:
+            ssh_client.close()
+            if self._config.authentication_mode is AuthenticationMode.PRIVATE_KEY:
+                raise ConfigurationError("SFTP private key file was not found") from None
+            raise ConnectionError("Unable to connect to SFTP server") from None
+        except PermissionError:
+            ssh_client.close()
+            if self._config.authentication_mode is AuthenticationMode.PRIVATE_KEY:
+                raise ConfigurationError("SFTP private key file cannot be read") from None
+            raise ConnectionError("Unable to connect to SFTP server") from None
+        except (OSError, TimeoutError):
             ssh_client.close()
             raise ConnectionError("Unable to connect to SFTP server") from None
 

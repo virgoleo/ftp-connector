@@ -9,6 +9,7 @@ import pytest
 
 from remote_transfer import (
     AuthenticationError,
+    ConfigurationError,
     ConnectionError,
     HostKeyVerificationError,
     OperationError,
@@ -109,6 +110,9 @@ def test_custom_known_hosts_is_loaded_and_unknown_keys_are_rejected() -> None:
     assert isinstance(policy, paramiko.RejectPolicy)
     assert not isinstance(policy, paramiko.AutoAddPolicy)
 
+    with pytest.raises(HostKeyVerificationError, match="not trusted"):
+        policy.missing_host_key(ssh_client, "unknown.sftp.test", MagicMock())
+
 
 def test_bad_host_key_is_translated_without_transport_details() -> None:
     client = SFTPClient(_config())
@@ -140,6 +144,32 @@ def test_authentication_and_connection_errors_are_translated() -> None:
             pytest.raises(stable_error),
         ):
             client.connect()
+
+
+def test_private_key_loading_error_identifies_key_configuration() -> None:
+    client = SFTPClient(_config(password=None, private_key_path=Path("test-key")))
+    ssh_client = MagicMock()
+    ssh_client.connect.side_effect = paramiko.PasswordRequiredException("passphrase required")
+
+    with (
+        patch("remote_transfer.transports.sftp.paramiko.SSHClient", return_value=ssh_client),
+        pytest.raises(AuthenticationError, match="passphrase is required or incorrect"),
+    ):
+        client.connect()
+
+    assert ssh_client.close.called
+
+
+def test_missing_private_key_file_is_a_configuration_error() -> None:
+    client = SFTPClient(_config(password=None, private_key_path=Path("missing-key")))
+    ssh_client = MagicMock()
+    ssh_client.connect.side_effect = FileNotFoundError("missing key")
+
+    with (
+        patch("remote_transfer.transports.sftp.paramiko.SSHClient", return_value=ssh_client),
+        pytest.raises(ConfigurationError, match="private key file was not found"),
+    ):
+        client.connect()
 
 
 def test_operation_timeout_is_reapplied_and_context_manager_closes_resources() -> None:
